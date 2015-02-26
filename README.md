@@ -42,8 +42,8 @@ then, connect drillbit.
 then, open http://localhost:8047/ in your browser.
 
 ## troubleshooting
-hang or exception happen, restart 'sqlline' after deleting 'c:\tmp\drill' folder.
-some query for hive may cause an exception since hive metastore implement issue.
+if drill got hang or exception happen, restart 'sqlline' after deleting 'c:\tmp\drill' folder.
+some query for hive may cause an exception due to hive metastore implement issue.
 
 
 
