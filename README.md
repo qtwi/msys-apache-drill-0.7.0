@@ -1,7 +1,7 @@
 # msys-apache-drill-0.7.0
 apache drill 0.7.0 for windows with msys/mingw
 
-this version of apache drill run with following applications.
+this version of apache drill runs with following applications.
 * hadoop 2.6.0
 * hive 0.12.0
 
@@ -13,7 +13,7 @@ download apache drill 0.7.0 source from git or apache archives.
 patch -u -p1 < ../apache-drill-0.7.0-2.6.0-0.12.0-src-0002r.patch
 ```
 
-copy hadoop-winutils-2.6.0.zip to distribution/src/lib folder.
+copy 'hadoop-winutils-2.6.0.zip' binary file to distribution/src/lib folder.
 
 ```
 mkdir distribution/src/lib
@@ -33,7 +33,7 @@ run 'sqlline' command after looking into 'conf/drill-override.conf' file.
 ```
 bin/sqlline
 ```
-then, connect drillbit.
+connect drillbit.
 
 ```
 > !connect jdbc:drill:zk=local
