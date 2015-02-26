@@ -1,0 +1,1584 @@
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/codegen/templates/ObjectInspectors.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/codegen/templates/ObjectInspectors.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/codegen/templates/ObjectInspectors.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/codegen/templates/ObjectInspectors.java	Thu Feb 26 07:16:03 2015
+@@ -38,7 +38,6 @@
+ import org.apache.hadoop.hive.serde2.io.ShortWritable;
+ import org.apache.hadoop.hive.serde2.io.TimestampWritable;
+ import org.apache.hadoop.hive.serde2.objectinspector.primitive.*;
+-import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoFactory;
+ import org.apache.hadoop.io.BooleanWritable;
+ import org.apache.hadoop.io.BytesWritable;
+ import org.apache.hadoop.io.FloatWritable;
+@@ -50,7 +49,7 @@
+   implements ${entry.hiveOI} {
+ 
+   public Drill${entry.drillType}ObjectInspector() {
+-    super(TypeInfoFactory.${entry.hiveType?lower_case}TypeInfo);
++    super(PrimitiveObjectInspectorUtils.${entry.hiveType?lower_case}TypeEntry);
+   }
+ 
+ <#if entry.drillType == "VarChar">
+@@ -162,7 +161,7 @@
+     @Override
+     public HiveDecimal getPrimitiveJavaObject(Object o){
+       Decimal38SparseHolder h = (Decimal38SparseHolder) o;
+-      return HiveDecimal.create(DecimalUtility.getBigDecimalFromSparse(h.buffer, h.start, h.nDecimalDigits, h.scale));
++      return new HiveDecimal(DecimalUtility.getBigDecimalFromSparse(h.buffer, h.start, h.nDecimalDigits, h.scale));
+     }
+   }
+ 
+@@ -170,7 +169,7 @@
+     @Override
+     public HiveDecimal getPrimitiveJavaObject(Object o){
+       NullableDecimal38SparseHolder h = (NullableDecimal38SparseHolder) o;
+-      return HiveDecimal.create(DecimalUtility.getBigDecimalFromSparse(h.buffer, h.start, h.nDecimalDigits, h.scale));
++      return new HiveDecimal(DecimalUtility.getBigDecimalFromSparse(h.buffer, h.start, h.nDecimalDigits, h.scale));
+     }
+   }
+ 
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/HiveFuncHolder.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/HiveFuncHolder.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/HiveFuncHolder.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/HiveFuncHolder.java	Thu Feb 26 07:16:03 2015
+@@ -161,7 +161,7 @@
+       return JExpr._new(m.directClass(GenericUDFBridge.class.getCanonicalName()))
+         .arg(JExpr.lit(udfName))
+         .arg(JExpr.lit(false))
+-        .arg(JExpr.lit(udfClazz.getCanonicalName().toString()));
++        .arg(JExpr.dotclass(m.directClass(udfClazz.getCanonicalName())));
+     }
+   }
+ 
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/HiveFunctionRegistry.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/HiveFunctionRegistry.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/HiveFunctionRegistry.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/HiveFunctionRegistry.java	Thu Feb 26 07:16:03 2015
+@@ -186,7 +186,7 @@
+                                                  MajorType[] argTypes,
+                                                  ObjectInspector[] argOIs) {
+     try {
+-      GenericUDF udfInstance = new GenericUDFBridge(udfName, false/* is operator */, udfClazz.getName());
++      GenericUDF udfInstance = new GenericUDFBridge(udfName, false/* is operator */, udfClazz);
+       ObjectInspector returnOI = udfInstance.initialize(argOIs);
+ 
+       return new HiveFuncHolder(
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/impl/hive/AbstractDrillPrimitiveObjectInspector.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/impl/hive/AbstractDrillPrimitiveObjectInspector.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/impl/hive/AbstractDrillPrimitiveObjectInspector.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/expr/fn/impl/hive/AbstractDrillPrimitiveObjectInspector.java	Thu Feb 26 07:16:03 2015
+@@ -18,12 +18,12 @@
+ package org.apache.drill.exec.expr.fn.impl.hive;
+ 
+ import org.apache.hadoop.hive.serde2.objectinspector.primitive.AbstractPrimitiveObjectInspector;
+-import org.apache.hadoop.hive.serde2.typeinfo.PrimitiveTypeInfo;
++import org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorUtils.PrimitiveTypeEntry;
+ 
+ 
+ public abstract class AbstractDrillPrimitiveObjectInspector extends AbstractPrimitiveObjectInspector {
+ 
+-  public AbstractDrillPrimitiveObjectInspector(PrimitiveTypeInfo typeEntry) {
++  public AbstractDrillPrimitiveObjectInspector(PrimitiveTypeEntry typeEntry) {
+     super(typeEntry);
+   }
+ 
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/planner/sql/HivePartitionDescriptor.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/planner/sql/HivePartitionDescriptor.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/planner/sql/HivePartitionDescriptor.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/planner/sql/HivePartitionDescriptor.java	Thu Jan  1 09:00:00 1970
+@@ -1,56 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- * http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.drill.exec.planner.sql;
+-
+-import org.apache.drill.exec.planner.PartitionDescriptor;
+-import org.apache.drill.exec.store.hive.HiveTable;
+-
+-import java.util.HashMap;
+-import java.util.List;
+-import java.util.Map;
+-
+-// Partition descriptor for hive tables
+-public class HivePartitionDescriptor implements PartitionDescriptor {
+-
+-  private final Map<String, Integer> partitionMap = new HashMap<>();
+-  private final int MAX_NESTED_SUBDIRS;
+-
+-  public HivePartitionDescriptor(List<HiveTable.FieldSchemaWrapper> partitionName) {
+-    int i = 0;
+-    for (HiveTable.FieldSchemaWrapper wrapper : partitionName) {
+-      partitionMap.put(wrapper.name, i);
+-      i++;
+-    }
+-    MAX_NESTED_SUBDIRS = i;
+-  }
+-
+-  @Override
+-  public int getPartitionHierarchyIndex(String partitionName) {
+-    return partitionMap.get(partitionName);
+-  }
+-
+-  @Override
+-  public boolean isPartitionName(String name) {
+-    return (partitionMap.get(name) != null);
+-  }
+-
+-  @Override
+-  public int getMaxHierarchyLevel() {
+-    return MAX_NESTED_SUBDIRS;
+-  }
+-}
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/planner/sql/logical/HivePushPartitionFilterIntoScan.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/planner/sql/logical/HivePushPartitionFilterIntoScan.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/planner/sql/logical/HivePushPartitionFilterIntoScan.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/planner/sql/logical/HivePushPartitionFilterIntoScan.java	Thu Jan  1 09:00:00 1970
+@@ -1,142 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- * http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package org.apache.drill.exec.planner.sql.logical;
+-
+-import java.util.LinkedList;
+-import java.util.List;
+-
+-import org.apache.drill.common.exceptions.DrillRuntimeException;
+-import org.apache.drill.common.exceptions.ExecutionSetupException;
+-import org.apache.drill.exec.physical.base.GroupScan;
+-import org.apache.drill.exec.planner.logical.DirPathBuilder;
+-import org.apache.drill.exec.planner.logical.DrillFilterRel;
+-import org.apache.drill.exec.planner.logical.DrillProjectRel;
+-import org.apache.drill.exec.planner.logical.DrillRel;
+-import org.apache.drill.exec.planner.logical.DrillScanRel;
+-import org.apache.drill.exec.planner.logical.PartitionPruningUtil;
+-import org.apache.drill.exec.planner.logical.RelOptHelper;
+-import org.apache.drill.exec.planner.sql.HivePartitionDescriptor;
+-import org.apache.drill.exec.store.StoragePluginOptimizerRule;
+-import org.apache.drill.exec.store.hive.HiveReadEntry;
+-import org.apache.drill.exec.store.hive.HiveScan;
+-import org.apache.drill.exec.store.hive.HiveTable;
+-import org.apache.drill.exec.store.hive.HiveTable.HivePartition;
+-import org.eigenbase.relopt.RelOptRuleCall;
+-import org.eigenbase.relopt.RelOptRuleOperand;
+-
+-import com.google.common.collect.Lists;
+-
+-public abstract class HivePushPartitionFilterIntoScan extends StoragePluginOptimizerRule {
+-
+-  public static final StoragePluginOptimizerRule HIVE_FILTER_ON_PROJECT =
+-      new HivePushPartitionFilterIntoScan(
+-          RelOptHelper.some(DrillFilterRel.class, RelOptHelper.some(DrillProjectRel.class, RelOptHelper.any(DrillScanRel.class))),
+-          "HivePushPartitionFilterIntoScan:Filter_On_Project") {
+-
+-        @Override
+-        public boolean matches(RelOptRuleCall call) {
+-          final DrillScanRel scan = (DrillScanRel) call.rel(2);
+-          GroupScan groupScan = scan.getGroupScan();
+-          return groupScan instanceof HiveScan &&  groupScan.supportsPartitionFilterPushdown();
+-        }
+-
+-        @Override
+-        public void onMatch(RelOptRuleCall call) {
+-          final DrillFilterRel filterRel = (DrillFilterRel) call.rel(0);
+-          final DrillProjectRel projectRel = (DrillProjectRel) call.rel(1);
+-          final DrillScanRel scanRel = (DrillScanRel) call.rel(2);
+-          doOnMatch(call, filterRel, projectRel, scanRel);
+-        }
+-      };
+-
+-  public static final StoragePluginOptimizerRule HIVE_FILTER_ON_SCAN =
+-      new HivePushPartitionFilterIntoScan(
+-          RelOptHelper.some(DrillFilterRel.class, RelOptHelper.any(DrillScanRel.class)),
+-          "HivePushPartitionFilterIntoScan:Filter_On_Scan") {
+-
+-        @Override
+-        public boolean matches(RelOptRuleCall call) {
+-          final DrillScanRel scan = (DrillScanRel) call.rel(1);
+-          GroupScan groupScan = scan.getGroupScan();
+-          return groupScan instanceof HiveScan &&  groupScan.supportsPartitionFilterPushdown();
+-        }
+-
+-        @Override
+-        public void onMatch(RelOptRuleCall call) {
+-          final DrillFilterRel filterRel = (DrillFilterRel) call.rel(0);
+-          final DrillScanRel scanRel = (DrillScanRel) call.rel(1);
+-          doOnMatch(call, filterRel, null, scanRel);
+-        }
+-      };
+-
+-  private HivePushPartitionFilterIntoScan(
+-      RelOptRuleOperand operand,
+-      String id) {
+-    super(operand, id);
+-  }
+-
+-  private HiveReadEntry splitFilter(HiveReadEntry origReadEntry, DirPathBuilder builder) {
+-    HiveTable table = origReadEntry.table;
+-    List<HivePartition> partitions = origReadEntry.partitions;
+-    List<HivePartition> newPartitions = new LinkedList<>();
+-    String pathPrefix = PartitionPruningUtil.truncatePrefixFromPath(table.getTable().getSd().getLocation());
+-    List<String> newFiles = Lists.newArrayList();
+-    List<String> dirPathList = builder.getDirPath();
+-
+-    for (String dirPath : dirPathList) {
+-      String fullPath = pathPrefix + dirPath;
+-      // check containment of this path in the list of files
+-      for (HivePartition part: partitions) {
+-        String origFilePath = origReadEntry.getPartitionLocation(part);
+-        String origFileName = PartitionPruningUtil.truncatePrefixFromPath(origFilePath);
+-
+-        if (origFileName.startsWith(fullPath)) {
+-          newFiles.add(origFileName);
+-          newPartitions.add(part);
+-        }
+-      }
+-    }
+-
+-    if (newFiles.size() > 0) {
+-      HiveReadEntry newReadEntry = new HiveReadEntry(table, newPartitions, origReadEntry.hiveConfigOverride);
+-      return newReadEntry;
+-    }
+-    return origReadEntry;
+-  }
+-
+-  protected void doOnMatch(RelOptRuleCall call, DrillFilterRel filterRel, DrillProjectRel projectRel, DrillScanRel scanRel) {
+-    DrillRel inputRel = projectRel != null ? projectRel : scanRel;
+-    HiveReadEntry origReadEntry = ((HiveScan)scanRel.getGroupScan()).hiveReadEntry;
+-    DirPathBuilder builder = new DirPathBuilder(filterRel, inputRel, filterRel.getCluster().getRexBuilder(), new HivePartitionDescriptor(origReadEntry.table.partitionKeys));
+-    HiveReadEntry newReadEntry = splitFilter(origReadEntry, builder);
+-
+-    if (origReadEntry == newReadEntry) {
+-      return; // no directory filter was pushed down
+-    }
+-
+-    try {
+-      HiveScan oldScan = (HiveScan) scanRel.getGroupScan();
+-      HiveScan hiveScan = new HiveScan(newReadEntry, oldScan.storagePlugin, oldScan.columns);
+-      PartitionPruningUtil.rewritePlan(call, filterRel, projectRel, scanRel, hiveScan, builder);
+-    } catch (ExecutionSetupException e) {
+-      throw new DrillRuntimeException(e);
+-    }
+-
+-  }
+-}
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveFieldConverter.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveFieldConverter.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveFieldConverter.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveFieldConverter.java	Thu Feb 26 07:16:03 2015
+@@ -19,19 +19,9 @@
+ 
+ import java.util.Map;
+ 
+-import org.apache.drill.exec.expr.holders.Decimal18Holder;
+-import org.apache.drill.exec.expr.holders.Decimal28SparseHolder;
+-import org.apache.drill.exec.expr.holders.Decimal38SparseHolder;
+-import org.apache.drill.exec.expr.holders.Decimal9Holder;
+-import org.apache.drill.exec.ops.FragmentContext;
+-import org.apache.drill.exec.util.DecimalUtility;
+ import org.apache.drill.exec.vector.NullableBigIntVector;
+ import org.apache.drill.exec.vector.NullableBitVector;
+ import org.apache.drill.exec.vector.NullableDateVector;
+-import org.apache.drill.exec.vector.NullableDecimal18Vector;
+-import org.apache.drill.exec.vector.NullableDecimal28SparseVector;
+-import org.apache.drill.exec.vector.NullableDecimal38SparseVector;
+-import org.apache.drill.exec.vector.NullableDecimal9Vector;
+ import org.apache.drill.exec.vector.NullableFloat4Vector;
+ import org.apache.drill.exec.vector.NullableFloat8Vector;
+ import org.apache.drill.exec.vector.NullableIntVector;
+@@ -41,6 +31,7 @@
+ import org.apache.drill.exec.vector.NullableVarBinaryVector;
+ import org.apache.drill.exec.vector.NullableVarCharVector;
+ import org.apache.drill.exec.vector.ValueVector;
++import org.apache.hadoop.hive.common.type.HiveDecimal;
+ import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
+ import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector.PrimitiveCategory;
+ import org.apache.hadoop.hive.serde2.objectinspector.primitive.BinaryObjectInspector;
+@@ -56,7 +47,6 @@
+ import org.apache.hadoop.hive.serde2.objectinspector.primitive.ShortObjectInspector;
+ import org.apache.hadoop.hive.serde2.objectinspector.primitive.StringObjectInspector;
+ import org.apache.hadoop.hive.serde2.objectinspector.primitive.TimestampObjectInspector;
+-import org.apache.hadoop.hive.serde2.typeinfo.DecimalTypeInfo;
+ import org.apache.hadoop.hive.serde2.typeinfo.PrimitiveTypeInfo;
+ import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
+ import org.apache.hadoop.io.Text;
+@@ -75,6 +65,7 @@
+     primMap.put(PrimitiveCategory.BINARY, Binary.class);
+     primMap.put(PrimitiveCategory.BOOLEAN, Boolean.class);
+     primMap.put(PrimitiveCategory.BYTE, Byte.class);
++    primMap.put(PrimitiveCategory.DECIMAL, Decimal.class);
+     primMap.put(PrimitiveCategory.DOUBLE, Double.class);
+     primMap.put(PrimitiveCategory.FLOAT, Float.class);
+     primMap.put(PrimitiveCategory.INT, Int.class);
+@@ -87,30 +78,13 @@
+   }
+ 
+ 
+-  public static HiveFieldConverter create(TypeInfo typeInfo, FragmentContext fragmentContext)
+-      throws IllegalAccessException, InstantiationException {
++  public static HiveFieldConverter create(TypeInfo typeInfo) throws IllegalAccessException, InstantiationException {
+     switch (typeInfo.getCategory()) {
+       case PRIMITIVE:
+         final PrimitiveCategory pCat = ((PrimitiveTypeInfo) typeInfo).getPrimitiveCategory();
+-        if (pCat != PrimitiveCategory.DECIMAL) {
+-          Class<? extends HiveFieldConverter> clazz = primMap.get(pCat);
+-          if (clazz != null) {
+-            return clazz.newInstance();
+-          }
+-        } else {
+-          // For decimal, based on precision return appropriate converter.
+-          DecimalTypeInfo decimalTypeInfo = (DecimalTypeInfo) typeInfo;
+-          int precision = decimalTypeInfo.precision();
+-          int scale = decimalTypeInfo.scale();
+-          if (precision <= 9) {
+-            return new Decimal9(precision, scale);
+-          } else if (precision <= 18) {
+-            return new Decimal18(precision, scale);
+-          } else if (precision <= 28) {
+-            return new Decimal28(precision, scale, fragmentContext);
+-          } else {
+-            return new Decimal38(precision, scale, fragmentContext);
+-          }
++        Class< ? extends HiveFieldConverter> clazz = primMap.get(pCat);
++        if (clazz != null) {
++          return clazz.newInstance();
+         }
+ 
+         HiveRecordReader.throwUnsupportedHiveDataTypeError(pCat.toString());
+@@ -151,75 +125,12 @@
+     }
+   }
+ 
+-  public static class Decimal9 extends HiveFieldConverter {
+-    private final Decimal9Holder holder = new Decimal9Holder();
+-
+-    public Decimal9(int precision, int scale) {
+-      holder.scale = scale;
+-      holder.precision = precision;
+-    }
+-
+-    @Override
+-    public boolean setSafeValue(ObjectInspector oi, Object hiveFieldValue, ValueVector outputVV, int outputIndex) {
+-      holder.value = DecimalUtility.getDecimal9FromBigDecimal(
+-          ((HiveDecimalObjectInspector)oi).getPrimitiveJavaObject(hiveFieldValue).bigDecimalValue(),
+-          holder.scale, holder.precision);
+-      return ((NullableDecimal9Vector) outputVV).getMutator().setSafe(outputIndex, holder);
+-    }
+-  }
+-
+-  public static class Decimal18 extends HiveFieldConverter {
+-    private final Decimal18Holder holder = new Decimal18Holder();
+-
+-    public Decimal18(int precision, int scale) {
+-      holder.scale = scale;
+-      holder.precision = precision;
+-    }
+-
+-    @Override
+-    public boolean setSafeValue(ObjectInspector oi, Object hiveFieldValue, ValueVector outputVV, int outputIndex) {
+-      holder.value = DecimalUtility.getDecimal18FromBigDecimal(
+-          ((HiveDecimalObjectInspector)oi).getPrimitiveJavaObject(hiveFieldValue).bigDecimalValue(),
+-          holder.scale, holder.precision);
+-      return ((NullableDecimal18Vector) outputVV).getMutator().setSafe(outputIndex, holder);
+-    }
+-  }
+-
+-  public static class Decimal28 extends HiveFieldConverter {
+-    private final Decimal28SparseHolder holder = new Decimal28SparseHolder();
+-
+-    public Decimal28(int precision, int scale, FragmentContext context) {
+-      holder.scale = scale;
+-      holder.precision = precision;
+-      holder.buffer = context.getManagedBuffer(Decimal28SparseHolder.nDecimalDigits * DecimalUtility.integerSize);
+-      holder.start = 0;
+-    }
+-
+-    @Override
+-    public boolean setSafeValue(ObjectInspector oi, Object hiveFieldValue, ValueVector outputVV, int outputIndex) {
+-      DecimalUtility.getSparseFromBigDecimal(
+-          ((HiveDecimalObjectInspector)oi).getPrimitiveJavaObject(hiveFieldValue).bigDecimalValue(),
+-          holder.buffer, holder.start, holder.scale, holder.precision, Decimal28SparseHolder.nDecimalDigits);
+-      return ((NullableDecimal28SparseVector) outputVV).getMutator().setSafe(outputIndex, holder);
+-    }
+-  }
+-
+-  public static class Decimal38 extends HiveFieldConverter {
+-    private final Decimal38SparseHolder holder = new Decimal38SparseHolder();
+-
+-    public Decimal38(int precision, int scale, FragmentContext context) {
+-      holder.scale = scale;
+-      holder.precision = precision;
+-      holder.buffer = context.getManagedBuffer(Decimal38SparseHolder.nDecimalDigits * DecimalUtility.integerSize);
+-      holder.start = 0;
+-    }
+-
++  public static class Decimal extends HiveFieldConverter {
+     @Override
+     public boolean setSafeValue(ObjectInspector oi, Object hiveFieldValue, ValueVector outputVV, int outputIndex) {
+-      DecimalUtility.getSparseFromBigDecimal(
+-          ((HiveDecimalObjectInspector)oi).getPrimitiveJavaObject(hiveFieldValue).bigDecimalValue(),
+-          holder.buffer, holder.start, holder.scale, holder.precision, Decimal38SparseHolder.nDecimalDigits);
+-      return ((NullableDecimal38SparseVector) outputVV).getMutator().setSafe(outputIndex, holder);
++      final HiveDecimal value = ((HiveDecimalObjectInspector)oi).getPrimitiveJavaObject(hiveFieldValue);
++      final byte[] strBytes = value.toString().getBytes();
++      return ((NullableVarCharVector) outputVV).getMutator().setSafe(outputIndex, strBytes, 0, strBytes.length);
+     }
+   }
+ 
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveReadEntry.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveReadEntry.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveReadEntry.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveReadEntry.java	Thu Feb 26 07:16:03 2015
+@@ -17,15 +17,11 @@
+  */
+ package org.apache.drill.exec.store.hive;
+ 
+-import java.util.ArrayList;
+-import java.util.LinkedList;
+ import java.util.List;
+ import java.util.Map;
+ 
+ import net.hydromatic.optiq.Schema.TableType;
+ 
+-import org.apache.drill.exec.store.hive.HiveTable.HivePartition;
+-import org.apache.hadoop.hive.metastore.api.FieldSchema;
+ import org.apache.hadoop.hive.metastore.api.Partition;
+ import org.apache.hadoop.hive.metastore.api.Table;
+ 
+@@ -71,32 +67,12 @@
+   }
+ 
+   @JsonIgnore
+-  public HiveTable getHiveTableWrapper() {
+-    return table;
+-  }
+-
+-  @JsonIgnore
+-  public List<HivePartition> getHivePartitionWrappers() {
+-    return partitions;
+-  }
+-
+-  @JsonIgnore
+   public TableType getJdbcTableType() {
+     if (table.getTable().getTableType().equals(org.apache.hadoop.hive.metastore.TableType.VIRTUAL_VIEW.toString())) {
+       return TableType.VIEW;
+     }
+ 
+     return TableType.TABLE;
+-  }
+-
+-  public String getPartitionLocation(HiveTable.HivePartition partition) {
+-    String partitionPath = table.getTable().getSd().getLocation();
+-
+-    for (String value: partition.values) {
+-      partitionPath += "/" + value;
+-    }
+-
+-    return partitionPath;
+   }
+ }
+ 
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveRecordReader.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveRecordReader.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveRecordReader.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveRecordReader.java	Thu Feb 26 07:16:03 2015
+@@ -18,7 +18,6 @@
+ package org.apache.drill.exec.store.hive;
+ 
+ import java.io.IOException;
+-import java.math.BigDecimal;
+ import java.sql.Date;
+ import java.sql.Timestamp;
+ import java.util.List;
+@@ -29,29 +28,19 @@
+ import org.apache.drill.common.exceptions.ExecutionSetupException;
+ import org.apache.drill.common.expression.SchemaPath;
+ import org.apache.drill.common.types.TypeProtos;
+-import org.apache.drill.common.types.TypeProtos.DataMode;
+-import org.apache.drill.common.types.TypeProtos.MinorType;
+ import org.apache.drill.common.types.TypeProtos.MajorType;
++import org.apache.drill.common.types.TypeProtos.MinorType;
++import org.apache.drill.common.types.Types;
+ import org.apache.drill.exec.exception.SchemaChangeException;
+ import org.apache.drill.exec.expr.TypeHelper;
+-import org.apache.drill.exec.expr.holders.Decimal18Holder;
+-import org.apache.drill.exec.expr.holders.Decimal28SparseHolder;
+-import org.apache.drill.exec.expr.holders.Decimal38SparseHolder;
+-import org.apache.drill.exec.expr.holders.Decimal9Holder;
+ import org.apache.drill.exec.ops.FragmentContext;
+ import org.apache.drill.exec.ops.OperatorContext;
+ import org.apache.drill.exec.physical.impl.OutputMutator;
+ import org.apache.drill.exec.record.MaterializedField;
+-import org.apache.drill.exec.rpc.ProtobufLengthDecoder;
+ import org.apache.drill.exec.store.AbstractRecordReader;
+-import org.apache.drill.exec.util.DecimalUtility;
+ import org.apache.drill.exec.vector.BigIntVector;
+ import org.apache.drill.exec.vector.BitVector;
+ import org.apache.drill.exec.vector.DateVector;
+-import org.apache.drill.exec.vector.Decimal18Vector;
+-import org.apache.drill.exec.vector.Decimal28SparseVector;
+-import org.apache.drill.exec.vector.Decimal38SparseVector;
+-import org.apache.drill.exec.vector.Decimal9Vector;
+ import org.apache.drill.exec.vector.Float4Vector;
+ import org.apache.drill.exec.vector.Float8Vector;
+ import org.apache.drill.exec.vector.IntVector;
+@@ -74,8 +63,6 @@
+ import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category;
+ import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector.PrimitiveCategory;
+ import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector;
+-import org.apache.hadoop.hive.serde2.typeinfo.DecimalTypeInfo;
+-import org.apache.hadoop.hive.serde2.typeinfo.HiveDecimalUtils;
+ import org.apache.hadoop.hive.serde2.typeinfo.PrimitiveTypeInfo;
+ import org.apache.hadoop.hive.serde2.typeinfo.StructTypeInfo;
+ import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
+@@ -92,8 +79,6 @@
+ 
+ public class HiveRecordReader extends AbstractRecordReader {
+ 
+-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(HiveRecordReader.class);
+-
+   protected Table table;
+   protected Partition partition;
+   protected InputSplit inputSplit;
+@@ -184,15 +169,12 @@
+       }
+       sInspector = (StructObjectInspector) oi;
+       StructTypeInfo sTypeInfo = (StructTypeInfo) TypeInfoUtils.getTypeInfoFromObjectInspector(sInspector);
+-      List<Integer> columnIds = Lists.newArrayList();
+       if (isStarQuery()) {
+         selectedColumnNames = sTypeInfo.getAllStructFieldNames();
+         tableColumns = selectedColumnNames;
+-        for(int i=0; i<selectedColumnNames.size(); i++) {
+-          columnIds.add(i);
+-        }
+       } else {
+         tableColumns = sTypeInfo.getAllStructFieldNames();
++        List<Integer> columnIds = Lists.newArrayList();
+         selectedColumnNames = Lists.newArrayList();
+         for (SchemaPath field : getColumns()) {
+           String columnName = field.getRootSegment().getPath();
+@@ -207,8 +189,9 @@
+             selectedColumnNames.add(columnName);
+           }
+         }
++        ColumnProjectionUtils.appendReadColumnIDs(job, columnIds);
++        ColumnProjectionUtils.appendReadColumnNames(job, selectedColumnNames);
+       }
+-      ColumnProjectionUtils.appendReadColumns(job, columnIds, selectedColumnNames);
+ 
+       for (String columnName : selectedColumnNames) {
+         ObjectInspector fieldOI = sInspector.getStructFieldRef(columnName).getFieldObjectInspector();
+@@ -216,7 +199,7 @@
+ 
+         selectedColumnObjInspectors.add(fieldOI);
+         selectedColumnTypes.add(typeInfo);
+-        selectedColumnFieldConverters.add(HiveFieldConverter.create(typeInfo, fragmentContext));
++        selectedColumnFieldConverters.add(HiveFieldConverter.create(typeInfo));
+       }
+ 
+       if (isStarQuery()) {
+@@ -261,14 +244,14 @@
+   public void setup(OutputMutator output) throws ExecutionSetupException {
+     try {
+       for (int i = 0; i < selectedColumnNames.size(); i++) {
+-        MajorType type = getMajorTypeFromHiveTypeInfo(selectedColumnTypes.get(i), true);
++        MajorType type = Types.optional(getMinorTypeFromHiveTypeInfo(selectedColumnTypes.get(i)));
+         MaterializedField field = MaterializedField.create(SchemaPath.getSimplePath(selectedColumnNames.get(i)), type);
+         Class vvClass = TypeHelper.getValueVectorClass(type.getMinorType(), type.getMode());
+         vectors.add(output.addField(field, vvClass));
+       }
+ 
+       for (int i = 0; i < selectedPartitionNames.size(); i++) {
+-        MajorType type = getMajorTypeFromHiveTypeInfo(selectedPartitionTypes.get(i), false);
++        MajorType type = Types.required(getMinorTypeFromHiveTypeInfo(selectedPartitionTypes.get(i)));
+         MaterializedField field = MaterializedField.create(SchemaPath.getSimplePath(selectedPartitionNames.get(i)), type);
+         Class vvClass = TypeHelper.getValueVectorClass(field.getType().getMinorType(), field.getDataMode());
+         pVectors.add(output.addField(field, vvClass));
+@@ -351,11 +334,6 @@
+ 
+   @Override
+   public void cleanup() {
+-    try {
+-      reader.close();
+-    } catch (Exception e) {
+-      logger.warn("Failure while closing Hive Record reader.", e);
+-    }
+   }
+ 
+   public static MinorType getMinorTypeFromHivePrimitiveTypeInfo(PrimitiveTypeInfo primitiveTypeInfo) {
+@@ -363,52 +341,38 @@
+       case BINARY:
+         return TypeProtos.MinorType.VARBINARY;
+       case BOOLEAN:
+-        return MinorType.BIT;
++        return TypeProtos.MinorType.BIT;
+       case BYTE:
+-        return MinorType.TINYINT;
+-      case DECIMAL: {
+-        DecimalTypeInfo decimalTypeInfo = (DecimalTypeInfo) primitiveTypeInfo;
+-        return DecimalUtility.getDecimalDataType(decimalTypeInfo.precision());
+-      }
++        return TypeProtos.MinorType.TINYINT;
++      case DECIMAL:
++        return TypeProtos.MinorType.VARCHAR;
+       case DOUBLE:
+-        return MinorType.FLOAT8;
++        return TypeProtos.MinorType.FLOAT8;
+       case FLOAT:
+-        return MinorType.FLOAT4;
++        return TypeProtos.MinorType.FLOAT4;
+       case INT:
+-        return MinorType.INT;
++        return TypeProtos.MinorType.INT;
+       case LONG:
+-        return MinorType.BIGINT;
++        return TypeProtos.MinorType.BIGINT;
+       case SHORT:
+-        return MinorType.SMALLINT;
++        return TypeProtos.MinorType.SMALLINT;
+       case STRING:
+       case VARCHAR:
+-        return MinorType.VARCHAR;
++        return TypeProtos.MinorType.VARCHAR;
+       case TIMESTAMP:
+-        return MinorType.TIMESTAMP;
++        return TypeProtos.MinorType.TIMESTAMP;
+       case DATE:
+-        return MinorType.DATE;
++        return TypeProtos.MinorType.DATE;
+     }
+ 
+     throwUnsupportedHiveDataTypeError(primitiveTypeInfo.getPrimitiveCategory().toString());
+     return null;
+   }
+ 
+-  public static MajorType getMajorTypeFromHiveTypeInfo(TypeInfo typeInfo, boolean nullable) {
++  public static MinorType getMinorTypeFromHiveTypeInfo(TypeInfo typeInfo) {
+     switch (typeInfo.getCategory()) {
+-      case PRIMITIVE: {
+-        PrimitiveTypeInfo primitiveTypeInfo = (PrimitiveTypeInfo) typeInfo;
+-        MinorType minorType = getMinorTypeFromHivePrimitiveTypeInfo(primitiveTypeInfo);
+-        MajorType.Builder typeBuilder = MajorType.newBuilder().setMinorType(minorType)
+-            .setMode((nullable ? DataMode.OPTIONAL : DataMode.REQUIRED));
+-
+-        if (primitiveTypeInfo.getPrimitiveCategory() == PrimitiveCategory.DECIMAL) {
+-          DecimalTypeInfo decimalTypeInfo = (DecimalTypeInfo) primitiveTypeInfo;
+-          typeBuilder.setPrecision(decimalTypeInfo.precision())
+-              .setScale(decimalTypeInfo.scale()).build();
+-        }
+-
+-        return typeBuilder.build();
+-      }
++      case PRIMITIVE:
++        return getMinorTypeFromHivePrimitiveTypeInfo(((PrimitiveTypeInfo) typeInfo));
+ 
+       case LIST:
+       case MAP:
+@@ -526,8 +490,11 @@
+           break;
+         }
+         case DECIMAL: {
+-          populateDecimalPartitionVector((DecimalTypeInfo)selectedPartitionTypes.get(i), vector,
+-              ((HiveDecimal)val).bigDecimalValue(), recordCount);
++          VarCharVector v = (VarCharVector) vector;
++          byte[] value = ((HiveDecimal) val).toString().getBytes();
++          for (int j = 0; j < recordCount; j++) {
++            v.getMutator().setSafe(j, value);
++          }
+           break;
+         }
+         default:
+@@ -537,57 +504,6 @@
+     }
+   }
+ 
+-  private void populateDecimalPartitionVector(DecimalTypeInfo typeInfo, ValueVector vector, BigDecimal bigDecimal,
+-      int recordCount) {
+-    int precision = typeInfo.precision();
+-    int scale = typeInfo.scale();
+-    if (precision <= 9) {
+-      Decimal9Holder holder = new Decimal9Holder();
+-      holder.scale = scale;
+-      holder.precision = precision;
+-      holder.value = DecimalUtility.getDecimal9FromBigDecimal(bigDecimal, precision, scale);
+-      Decimal9Vector v = (Decimal9Vector) vector;
+-      for (int j = 0; j < recordCount; j++) {
+-        v.getMutator().setSafe(j, holder);
+-      }
+-    } else if (precision <= 18) {
+-      Decimal18Holder holder = new Decimal18Holder();
+-      holder.scale = scale;
+-      holder.precision = precision;
+-      holder.value = DecimalUtility.getDecimal18FromBigDecimal(bigDecimal, precision, scale);
+-      Decimal18Vector v = (Decimal18Vector) vector;
+-      for (int j = 0; j < recordCount; j++) {
+-        v.getMutator().setSafe(j, holder);
+-      }
+-    } else if (precision <= 28) {
+-      Decimal28SparseHolder holder = new Decimal28SparseHolder();
+-      holder.scale = scale;
+-      holder.precision = precision;
+-      holder.buffer = fragmentContext.getManagedBuffer(
+-          Decimal28SparseHolder.nDecimalDigits * DecimalUtility.integerSize);
+-      holder.start = 0;
+-      DecimalUtility.getSparseFromBigDecimal(bigDecimal, holder.buffer, 0, scale, precision,
+-          Decimal28SparseHolder.nDecimalDigits);
+-      Decimal28SparseVector v = (Decimal28SparseVector) vector;
+-      for (int j = 0; j < recordCount; j++) {
+-        v.getMutator().setSafe(j, holder);
+-      }
+-    } else {
+-      Decimal38SparseHolder holder = new Decimal38SparseHolder();
+-      holder.scale = scale;
+-      holder.precision = precision;
+-      holder.buffer = fragmentContext.getManagedBuffer(
+-          Decimal38SparseHolder.nDecimalDigits * DecimalUtility.integerSize);
+-      holder.start = 0;
+-      DecimalUtility.getSparseFromBigDecimal(bigDecimal, holder.buffer, 0, scale, precision,
+-          Decimal38SparseHolder.nDecimalDigits);
+-      Decimal38SparseVector v = (Decimal38SparseVector) vector;
+-      for (int j = 0; j < recordCount; j++) {
+-        v.getMutator().setSafe(j, holder);
+-      }
+-    }
+-  }
+-
+   /** Partition value is received in string format. Convert it into appropriate object based on the type. */
+   private Object convertPartitionType(TypeInfo typeInfo, String value) {
+     if (typeInfo.getCategory() != Category.PRIMITIVE) {
+@@ -604,11 +520,8 @@
+         return Boolean.parseBoolean(value);
+       case BYTE:
+         return Byte.parseByte(value);
+-      case DECIMAL: {
+-        DecimalTypeInfo decimalTypeInfo = (DecimalTypeInfo) typeInfo;
+-        return HiveDecimalUtils.enforcePrecisionScale(HiveDecimal.create(value),
+-            decimalTypeInfo.precision(), decimalTypeInfo.scale());
+-      }
++      case DECIMAL:
++        return new HiveDecimal(value);
+       case DOUBLE:
+         return Double.parseDouble(value);
+       case FLOAT:
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveScan.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveScan.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveScan.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveScan.java	Thu Feb 26 07:16:03 2015
+@@ -43,7 +43,6 @@
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hive.metastore.MetaStoreUtils;
+-import org.apache.hadoop.hive.metastore.api.FieldSchema;
+ import org.apache.hadoop.hive.metastore.api.Partition;
+ import org.apache.hadoop.hive.metastore.api.Table;
+ import org.apache.hadoop.mapred.FileInputFormat;
+@@ -68,6 +67,8 @@
+   @JsonProperty("hive-table")
+   public HiveReadEntry hiveReadEntry;
+   @JsonIgnore
++  private final Table table;
++  @JsonIgnore
+   private List<InputSplit> inputSplits = Lists.newArrayList();
+   @JsonIgnore
+   public HiveStoragePlugin storagePlugin;
+@@ -75,6 +76,8 @@
+   public String storagePluginName;
+ 
+   @JsonIgnore
++  public List<Partition> partitions;
++  @JsonIgnore
+   private final Collection<DrillbitEndpoint> endpoints;
+ 
+   @JsonProperty("columns")
+@@ -92,17 +95,20 @@
+                   @JsonProperty("columns") List<SchemaPath> columns,
+                   @JacksonInject StoragePluginRegistry pluginRegistry) throws ExecutionSetupException {
+     this.hiveReadEntry = hiveReadEntry;
++    this.table = hiveReadEntry.getTable();
+     this.storagePluginName = storagePluginName;
+     this.storagePlugin = (HiveStoragePlugin) pluginRegistry.getPlugin(storagePluginName);
+     this.columns = columns;
++    this.partitions = hiveReadEntry.getPartitions();
+     getSplits();
+     endpoints = storagePlugin.getContext().getBits();
+   }
+ 
+   public HiveScan(HiveReadEntry hiveReadEntry, HiveStoragePlugin storagePlugin, List<SchemaPath> columns) throws ExecutionSetupException {
++    this.table = hiveReadEntry.getTable();
+     this.hiveReadEntry = hiveReadEntry;
+     this.columns = columns;
+-    this.storagePlugin = storagePlugin;
++    this.partitions = hiveReadEntry.getPartitions();
+     getSplits();
+     endpoints = storagePlugin.getContext().getBits();
+     this.storagePluginName = storagePlugin.getName();
+@@ -115,8 +121,10 @@
+     this.inputSplits = that.inputSplits;
+     this.mappings = that.mappings;
+     this.partitionMap = that.partitionMap;
++    this.partitions = that.partitions;
+     this.storagePlugin = that.storagePlugin;
+     this.storagePluginName = that.storagePluginName;
++    this.table = that.table;
+   }
+ 
+   public List<SchemaPath> getColumns() {
+@@ -125,8 +133,6 @@
+ 
+   private void getSplits() throws ExecutionSetupException {
+     try {
+-      List<Partition> partitions = hiveReadEntry.getPartitions();
+-      Table table = hiveReadEntry.getTable();
+       if (partitions == null || partitions.size() == 0) {
+         Properties properties = MetaStoreUtils.getTableMetadata(table);
+         JobConf job = new JobConf();
+@@ -136,8 +142,7 @@
+         for (Map.Entry<String, String> entry : hiveReadEntry.hiveConfigOverride.entrySet()) {
+           job.set(entry.getKey(), entry.getValue());
+         }
+-        InputFormat<?, ?> format = (InputFormat<?, ?>)
+-            Class.forName(table.getSd().getInputFormat()).getConstructor().newInstance();
++        InputFormat<?, ?> format = (InputFormat<?, ?>) Class.forName(table.getSd().getInputFormat()).getConstructor().newInstance();
+         job.setInputFormat(format.getClass());
+         Path path = new Path(table.getSd().getLocation());
+         FileSystem fs = FileSystem.get(job);
+@@ -298,10 +303,9 @@
+ 
+   @Override
+   public String toString() {
+-    return "HiveScan [table=" + hiveReadEntry.getHiveTableWrapper()
++    return "HiveScan [table=" + table
+         + ", inputSplits=" + inputSplits
+-        + ", columns=" + columns
+-        + ", partitions= " + hiveReadEntry.getHivePartitionWrappers() +"]";
++        + ", columns=" + columns + "]";
+   }
+ 
+   @Override
+@@ -316,12 +320,4 @@
+     return true;
+   }
+ 
+-  // Return true if the current table is partitioned false otherwise
+-  public boolean supportsPartitionFilterPushdown() {
+-    List<FieldSchema> partitionKeys = hiveReadEntry.getTable().getPartitionKeys();
+-    if (partitionKeys == null || partitionKeys.size() == 0) {
+-      return false;
+-    }
+-    return true;
+-  }
+ }
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveStoragePlugin.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveStoragePlugin.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveStoragePlugin.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveStoragePlugin.java	Thu Feb 26 07:16:04 2015
+@@ -19,8 +19,6 @@
+ 
+ import java.io.IOException;
+ import java.util.List;
+-import java.util.Set;
+-import com.google.common.collect.ImmutableSet;
+ 
+ import net.hydromatic.optiq.Schema.TableType;
+ import net.hydromatic.optiq.SchemaPlus;
+@@ -28,11 +26,9 @@
+ import org.apache.drill.common.JSONOptions;
+ import org.apache.drill.common.exceptions.ExecutionSetupException;
+ import org.apache.drill.common.expression.SchemaPath;
+-import org.apache.drill.exec.planner.sql.logical.HivePushPartitionFilterIntoScan;
+ import org.apache.drill.exec.rpc.user.UserSession;
+ import org.apache.drill.exec.server.DrillbitContext;
+ import org.apache.drill.exec.store.AbstractStoragePlugin;
+-import org.apache.drill.exec.store.StoragePluginOptimizerRule;
+ import org.apache.drill.exec.store.hive.schema.HiveSchemaFactory;
+ 
+ import com.fasterxml.jackson.core.type.TypeReference;
+@@ -84,8 +80,6 @@
+   public void registerSchemas(UserSession session, SchemaPlus parent) {
+     schemaFactory.registerSchemas(session, parent);
+   }
+-  public Set<StoragePluginOptimizerRule> getOptimizerRules() {
+-    return ImmutableSet.of(HivePushPartitionFilterIntoScan.HIVE_FILTER_ON_PROJECT, HivePushPartitionFilterIntoScan.HIVE_FILTER_ON_SCAN);
+-  }
++
+ 
+ }
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveTable.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveTable.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveTable.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/HiveTable.java	Thu Feb 26 07:16:04 2015
+@@ -119,21 +119,6 @@
+     return table;
+   }
+ 
+-  @Override
+-  public String toString() {
+-    StringBuilder sb = new StringBuilder("Table(");
+-
+-    sb.append("dbName:");
+-    sb.append(this.dbName);
+-    sb.append(", ");
+-
+-    sb.append("tableName:");
+-    sb.append(this.tableName);
+-    sb.append(")");
+-
+-    return sb.toString();
+-  }
+-
+   public static class HivePartition {
+ 
+     @JsonIgnore
+@@ -188,15 +173,6 @@
+     @JsonIgnore
+     public Partition getPartition() {
+       return partition;
+-    }
+-
+-    @Override
+-    public String toString() {
+-      StringBuilder sb = new StringBuilder("Partition(");
+-      sb.append("values:");
+-      sb.append(this.values);
+-      sb.append(")");
+-      return sb.toString();
+     }
+   }
+ 
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/schema/DrillHiveTable.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/schema/DrillHiveTable.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/schema/DrillHiveTable.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/main/java/org/apache/drill/exec/store/hive/schema/DrillHiveTable.java	Thu Feb 26 07:16:04 2015
+@@ -26,7 +26,6 @@
+ import org.apache.drill.exec.store.hive.HiveStoragePlugin;
+ import org.apache.hadoop.hive.metastore.api.FieldSchema;
+ import org.apache.hadoop.hive.ql.metadata.Table;
+-import org.apache.hadoop.hive.serde2.typeinfo.DecimalTypeInfo;
+ import org.apache.hadoop.hive.serde2.typeinfo.ListTypeInfo;
+ import org.apache.hadoop.hive.serde2.typeinfo.MapTypeInfo;
+ import org.apache.hadoop.hive.serde2.typeinfo.PrimitiveTypeInfo;
+@@ -108,10 +107,9 @@
+       case BINARY:
+         return typeFactory.createSqlType(SqlTypeName.BINARY);
+ 
+-      case DECIMAL: {
+-        DecimalTypeInfo decimalTypeInfo = (DecimalTypeInfo)pTypeInfo;
+-        return typeFactory.createSqlType(SqlTypeName.DECIMAL, decimalTypeInfo.precision(), decimalTypeInfo.scale());
+-      }
++      case DECIMAL:
++        final int precision = 38; // Hive 0.12 has standard precision
++        return typeFactory.createSqlType(SqlTypeName.DECIMAL, precision);
+ 
+       case STRING:
+       case VARCHAR: {
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/test/java/org/apache/drill/exec/TestHiveProjectPushDown.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/test/java/org/apache/drill/exec/TestHiveProjectPushDown.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/test/java/org/apache/drill/exec/TestHiveProjectPushDown.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/test/java/org/apache/drill/exec/TestHiveProjectPushDown.java	Thu Feb 26 07:16:04 2015
+@@ -65,8 +65,8 @@
+ 
+   @Test
+   public void testMultiplePartitionColumnsProject() throws Exception {
+-    String query = "SELECT double_part as dbl_p, decimal0_part as dec_p FROM hive.`default`.readtest";
+-    String expectedColNames = " \"columns\" : [ \"`double_part`\", \"`decimal0_part`\" ]";
++    String query = "SELECT double_part as dbl_p, decimal_part as dec_p FROM hive.`default`.readtest";
++    String expectedColNames = " \"columns\" : [ \"`double_part`\", \"`decimal_part`\" ]";
+ 
+     testHelper(query, expectedColNames, 2);
+   }
+@@ -74,9 +74,9 @@
+   @Test
+   public void testPartitionAndRegularColumnProjectColumn() throws Exception {
+     String query = "SELECT boolean_field as b_f, tinyint_field as ti_f, " +
+-        "double_part as dbl_p, decimal0_part as dec_p FROM hive.`default`.readtest";
++        "double_part as dbl_p, decimal_part as dec_p FROM hive.`default`.readtest";
+     String expectedColNames = " \"columns\" : [ \"`boolean_field`\", \"`tinyint_field`\", " +
+-        "\"`double_part`\", \"`decimal0_part`\" ]";
++        "\"`double_part`\", \"`decimal_part`\" ]";
+ 
+     testHelper(query, expectedColNames, 2);
+   }
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/core/src/test/java/org/apache/drill/exec/store/hive/HiveTestDataGenerator.java apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/test/java/org/apache/drill/exec/store/hive/HiveTestDataGenerator.java
+--- apache-drill-0.7.0-src/contrib/storage-hive/core/src/test/java/org/apache/drill/exec/store/hive/HiveTestDataGenerator.java	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/core/src/test/java/org/apache/drill/exec/store/hive/HiveTestDataGenerator.java	Thu Feb 26 07:16:04 2015
+@@ -79,13 +79,13 @@
+     cleanDir(DB_DIR);
+     cleanDir(WH_DIR);
+ 
+-    HiveConf conf = new HiveConf(SessionState.class);
++    HiveConf conf = new HiveConf();
+ 
+     conf.set("javax.jdo.option.ConnectionURL", String.format("jdbc:derby:;databaseName=%s;create=true", DB_DIR));
+     conf.set(FileSystem.FS_DEFAULT_NAME_KEY, "file:///");
+     conf.set("hive.metastore.warehouse.dir", WH_DIR);
+ 
+-    SessionState ss = new SessionState(conf);
++    SessionState ss = new SessionState(new HiveConf(SessionState.class));
+     SessionState.start(ss);
+     hiveDriver = new Driver(conf);
+ 
+@@ -120,11 +120,7 @@
+         "  binary_field BINARY," +
+         "  boolean_field BOOLEAN," +
+         "  tinyint_field TINYINT," +
+-        "  decimal0_field DECIMAL," +
+-        "  decimal9_field DECIMAL(6, 2)," +
+-        "  decimal18_field DECIMAL(15, 5)," +
+-        "  decimal28_field DECIMAL(23, 1)," +
+-        "  decimal38_field DECIMAL(30, 3)," +
++        "  decimal_field DECIMAL," +
+         "  double_field DOUBLE," +
+         "  float_field FLOAT," +
+         "  int_field INT," +
+@@ -138,11 +134,7 @@
+         "  binary_part BINARY," +
+         "  boolean_part BOOLEAN," +
+         "  tinyint_part TINYINT," +
+-        "  decimal0_part DECIMAL," +
+-        "  decimal9_part DECIMAL(6, 2)," +
+-        "  decimal18_part DECIMAL(15, 5)," +
+-        "  decimal28_part DECIMAL(23, 1)," +
+-        "  decimal38_part DECIMAL(30, 3)," +
++        "  decimal_part DECIMAL," +
+         "  double_part DOUBLE," +
+         "  float_part FLOAT," +
+         "  int_part INT," +
+@@ -161,11 +153,7 @@
+         "  binary_part='binary', " +
+         "  boolean_part='true', " +
+         "  tinyint_part='64', " +
+-        "  decimal0_part='36.9', " +
+-        "  decimal9_part='36.9', " +
+-        "  decimal18_part='3289379872.945645', " +
+-        "  decimal28_part='39579334534534.35345', " +
+-        "  decimal38_part='363945093845093890.9', " +
++        "  decimal_part='3489423929323435243', " +
+         "  double_part='8.345', " +
+         "  float_part='4.67', " +
+         "  int_part='123456', " +
+@@ -182,11 +170,7 @@
+         "  binary_part='binary', " +
+         "  boolean_part='true', " +
+         "  tinyint_part='64', " +
+-        "  decimal0_part='36.9', " +
+-        "  decimal9_part='36.9', " +
+-        "  decimal18_part='3289379872.945645', " +
+-        "  decimal28_part='39579334534534.35345', " +
+-        "  decimal38_part='363945093845093890.9', " +
++        "  decimal_part='3489423929323435243', " +
+         "  double_part='8.345', " +
+         "  float_part='4.67', " +
+         "  int_part='123456', " +
+@@ -210,7 +194,7 @@
+         "dataType DATE, " +
+         "timestampType TIMESTAMP, " +
+         "binaryType BINARY, " +
+-        "decimalType DECIMAL(38, 2), " +
++        "decimalType DECIMAL, " +
+         "stringType STRING, " +
+         "varCharType VARCHAR(20), " +
+         "listType ARRAY<STRING>, " +
+@@ -222,19 +206,6 @@
+     // create a Hive view to test how its metadata is populated in Drill's INFORMATION_SCHEMA
+     executeQuery("CREATE VIEW IF NOT EXISTS hiveview AS SELECT * FROM kv");
+ 
+-    // create partitioned hive table to test partition pruning
+-    executeQuery("USE default");
+-    executeQuery("CREATE TABLE IF NOT EXISTS default.partition_pruning_test(a DATE, b TIMESTAMP) "+
+-        "partitioned by (c int, d int, e int) ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' STORED AS TEXTFILE");
+-    executeQuery(String.format("LOAD DATA LOCAL INPATH '%s' INTO TABLE default.partition_pruning_test partition(c=1, d=1, e=1)", testDateDataFile));
+-    executeQuery(String.format("LOAD DATA LOCAL INPATH '%s' INTO TABLE default.partition_pruning_test partition(c=1, d=1, e=2)", testDateDataFile));
+-    executeQuery(String.format("LOAD DATA LOCAL INPATH '%s' INTO TABLE default.partition_pruning_test partition(c=1, d=2, e=1)", testDateDataFile));
+-    executeQuery(String.format("LOAD DATA LOCAL INPATH '%s' INTO TABLE default.partition_pruning_test partition(c=1, d=1, e=2)", testDateDataFile));
+-    executeQuery(String.format("LOAD DATA LOCAL INPATH '%s' INTO TABLE default.partition_pruning_test partition(c=2, d=1, e=1)", testDateDataFile));
+-    executeQuery(String.format("LOAD DATA LOCAL INPATH '%s' INTO TABLE default.partition_pruning_test partition(c=2, d=1, e=2)", testDateDataFile));
+-    executeQuery(String.format("LOAD DATA LOCAL INPATH '%s' INTO TABLE default.partition_pruning_test partition(c=2, d=3, e=1)", testDateDataFile));
+-    executeQuery(String.format("LOAD DATA LOCAL INPATH '%s' INTO TABLE default.partition_pruning_test partition(c=2, d=3, e=2)", testDateDataFile));
+-
+     ss.close();
+   }
+ 
+@@ -291,10 +262,8 @@
+     File file = getTempFile();
+ 
+     PrintWriter printWriter = new PrintWriter(file);
+-    printWriter.println("YmluYXJ5ZmllbGQ=,false,34,65.99,2347.923,2758725827.9999,29375892739852.7689," +
+-        "89853749534593985.7834783,8.345,4.67,123456,234235,3455,stringfield,varcharfield," +
+-        "2013-07-05 17:01:00,2013-07-05");
+-    printWriter.println(",,,,,,,,,,,,,,,,");
++    printWriter.println("YmluYXJ5ZmllbGQ=,false,34,3489423929323435243,8.345,4.67,123456,234235,3455,stringfield,varcharfield,2013-07-05 17:01:00,2013-07-05");
++    printWriter.println(",,,,,,,,,,,,");
+     printWriter.close();
+ 
+     return file.getPath();
+diff -uN -r apache-drill-0.7.0-src/contrib/storage-hive/hive-exec-shade/pom.xml apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/hive-exec-shade/pom.xml
+--- apache-drill-0.7.0-src/contrib/storage-hive/hive-exec-shade/pom.xml	Fri Dec 19 04:55:56 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/contrib/storage-hive/hive-exec-shade/pom.xml	Thu Feb 26 07:16:04 2015
+@@ -28,15 +28,11 @@
+   <packaging>jar</packaging>
+   <name>contrib/hive-storage-plugin/hive-exec-shaded</name>
+ 
+-  <properties>
+-    <hive.version>0.13.1</hive.version>
+-  </properties>
+-
+   <dependencies>
+     <dependency>
+       <groupId>org.apache.hive</groupId>
+       <artifactId>hive-exec</artifactId>
+-      <version>${hive.version}</version>
++      <version>0.12.0</version>
+       <scope>compile</scope>
+       <exclusions>
+         <exclusion>
+@@ -72,13 +68,9 @@
+     <dependency>
+       <groupId>org.apache.hive</groupId>
+       <artifactId>hive-metastore</artifactId>
+-      <version>${hive.version}</version>
++      <version>0.12.0</version>
+       <exclusions>
+         <exclusion>
+-          <groupId>org.apache.hive</groupId>
+-          <artifactId>hive-serde</artifactId>
+-        </exclusion>
+-        <exclusion>
+           <groupId>commons-logging</groupId>
+           <artifactId>commons-logging</artifactId>
+         </exclusion>
+@@ -99,7 +91,7 @@
+     <dependency>
+       <groupId>org.apache.hive</groupId>
+       <artifactId>hive-hbase-handler</artifactId>
+-      <version>${hive.version}</version>
++      <version>0.12.0</version>
+       <exclusions>
+         <exclusion>
+           <groupId>org.slf4j</groupId>
+@@ -109,34 +101,6 @@
+           <groupId>org.apache.hbase</groupId>
+           <artifactId>hbase</artifactId>
+         </exclusion>
+-        <exclusion>
+-          <groupId>commons-logging</groupId>
+-          <artifactId>commons-logging</artifactId>
+-        </exclusion>
+-        <exclusion>
+-          <groupId>org.apache.hive</groupId>
+-          <artifactId>hive-service</artifactId>
+-        </exclusion>
+-        <exclusion>
+-          <groupId>org.apache.hive</groupId>
+-          <artifactId>hive-exec</artifactId>
+-        </exclusion>
+-        <exclusion>
+-          <groupId>org.apache.hive</groupId>
+-          <artifactId>hive-shims</artifactId>
+-        </exclusion>
+-        <exclusion>
+-          <groupId>org.apache.hive</groupId>
+-          <artifactId>hive-serde</artifactId>
+-        </exclusion>
+-        <exclusion>
+-          <groupId>org.apache.hive</groupId>
+-          <artifactId>hive-metastore</artifactId>
+-        </exclusion>
+-        <exclusion>
+-          <groupId>org.apache.hive</groupId>
+-          <artifactId>hive-common</artifactId>
+-        </exclusion>
+       </exclusions>
+     </dependency>
+   </dependencies>
+@@ -157,14 +121,6 @@
+               <artifactSet>
+                 <includes>
+                   <include>org.apache.hive:hive-exec</include>
+-                  <include>com.twitter:parquet-column</include>
+-                  <include>com.twitter:parquet-hadoop</include>
+-                  <include>commons-codec:commons-codec</include>
+-                  <include>com.twitter:parquet-format</include>
+-                  <include>com.twitter:parquet-common</include>
+-                  <include>com.twitter:parquet-jackson</include>
+-                  <include>com.twitter:parquet-encoding</include>
+-                  <include>com.twitter:parquet-generator</include>
+                 </includes>
+               </artifactSet>
+               <createDependencyReducedPom>false</createDependencyReducedPom>
+@@ -172,15 +128,7 @@
+               <relocations>
+                 <relocation>
+                   <pattern>com.google.</pattern>
+-                  <shadedPattern>hive.com.google.</shadedPattern>
+-                </relocation>
+-                <relocation>
+-                  <pattern>parquet.</pattern>
+-                  <shadedPattern>hive.parquet.</shadedPattern>
+-                </relocation>
+-                <relocation>
+-                  <pattern>org.apache.commons.codec.</pattern>
+-                  <shadedPattern>hive.org.apache.commons.codec.</shadedPattern>
++                  <shadedPattern>com.google.hive12.</shadedPattern>
+                 </relocation>
+               </relocations>
+             </configuration>
+diff -uN -r apache-drill-0.7.0-src/distribution/pom.xml apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/pom.xml
+--- apache-drill-0.7.0-src/distribution/pom.xml	Fri Dec 19 04:55:56 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/pom.xml	Thu Feb 26 07:16:04 2015
+@@ -191,6 +191,14 @@
+         </property>
+       </activation>
+       <dependencies>
++        <dependency>
++          <groupId>org.apache.hadoop</groupId>
++          <artifactId>hadoop-winutils</artifactId>
++          <version>${dep.hadoop.version}</version>
++          <type>zip</type>
++          <scope>system</scope>
++          <systemPath>${basedir}/src/lib/hadoop-winutils-${dep.hadoop.version}.zip</systemPath>
++        </dependency>
+       </dependencies>
+       <build>
+       </build>
+@@ -210,6 +218,12 @@
+         <dependency>
+           <groupId>com.mapr.fs</groupId>
+           <artifactId>mapr-hbase</artifactId>
++        </dependency>
++        <dependency>
++          <groupId>org.apache.hadoop</groupId>
++          <artifactId>hadoop-winutils</artifactId>
++          <version>2.4.1-mapr-1408</version>
++          <type>zip</type>
+         </dependency>
+ 
+       </dependencies>
+diff -uN -r apache-drill-0.7.0-src/distribution/src/assemble/bin.xml apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/assemble/bin.xml
+--- apache-drill-0.7.0-src/distribution/src/assemble/bin.xml	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/assemble/bin.xml	Thu Feb 26 07:16:04 2015
+@@ -184,6 +184,16 @@
+       <scope>test</scope>
+     </dependencySet>
+ 
++    <dependencySet>
++      <outputDirectory>winutils/bin</outputDirectory>
++      <unpack>true</unpack>
++      <useProjectArtifact>false</useProjectArtifact>
++      <includes>
++        <include>org.apache.hadoop:hadoop-winutils</include>
++      </includes>
++      <scope>system</scope>
++    </dependencySet>
++
+   </dependencySets>
+ 
+   <fileSets>
+@@ -249,6 +259,11 @@
+     </file>
+     <file>
+       <source>src/resources/drill_dumpcat</source>
++      <fileMode>0755</fileMode>
++      <outputDirectory>bin</outputDirectory>
++    </file>
++    <file>
++      <source>src/resources/pathfix</source>
+       <fileMode>0755</fileMode>
+       <outputDirectory>bin</outputDirectory>
+     </file>
+Binary files apache-drill-0.7.0-src/distribution/src/lib/hadoop-winutils-2.6.0.zip and apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/lib/hadoop-winutils-2.6.0.zip differ
+diff -uN -r apache-drill-0.7.0-src/distribution/src/resources/drill-config.sh apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/drill-config.sh
+--- apache-drill-0.7.0-src/distribution/src/resources/drill-config.sh	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/drill-config.sh	Thu Feb 26 07:16:04 2015
+@@ -54,6 +54,8 @@
+   DRILL_HOME="$home"
+ fi
+ 
++. $home/bin/pathfix
++
+ #check to see if the conf dir or drill home are given as an optional arguments
+ while [ $# -gt 1 ]; do
+   if [ "--config" = "$1" ]; then
+@@ -127,8 +129,10 @@
+ 
+ # Test for cygwin
+ is_cygwin=false
++is_mingw=false
+ case "`uname`" in
+ CYGWIN*) is_cygwin=true;;
++MINGW*) is_mingw=true;;
+ esac
+ 
+ # Test for or find JAVA_HOME
+@@ -155,12 +159,16 @@
+   fi
+ fi
+ # Now, verify that 'java' binary exists and is suitable for Drill.
+-if $is_cygwin; then
++if [ $is_cygwin -o $is_mingw ]; then
+   JAVA_BIN="java.exe"
+ else
+   JAVA_BIN="java"
+ fi
+-JAVA=`find -L "$JAVA_HOME" -name $JAVA_BIN -type f | head -n 1`
++if $is_mingw; then
++  JAVA=`find "$JAVA_HOME" -name $JAVA_BIN -type f | head -n 1`
++else
++  JAVA=`find -L "$JAVA_HOME" -name $JAVA_BIN -type f | head -n 1`
++fi
+ if [ ! -e "$JAVA" ]; then
+   echo "Java not found at JAVA_HOME=$JAVA_HOME."
+   exit 1
+@@ -178,10 +186,19 @@
+   DRILL_CONF_DIR=`cygpath -w "$DRILL_CONF_DIR"`
+   DRILL_LOG_DIR=`cygpath -w "$DRILL_LOG_DIR"`
+   CP=`cygpath -w -p "$CP"`
++elif $is_mingw; then
++  DRILL_HOME=`pathfix "$DRILL_HOME"`
++  DRILL_CONF_DIR=`pathfix "$DRILL_CONF_DIR"`
++  DRILL_LOG_DIR=`pathfix "$DRILL_LOG_DIR"`
++  CP=`pathfix "$CP"`
++  if [ ! -d "$HADOOP_HOME" ]; then
++    export HADOOP_HOME=$DRILL_HOME/winutils
++  fi
+ fi
+ 
+ # Variables exported form this script
+ export is_cygwin
++export is_mingw
+ export DRILL_HOME
+ export DRILL_CONF_DIR
+ export DRILL_LOG_DIR
+diff -uN -r apache-drill-0.7.0-src/distribution/src/resources/drill-env.sh apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/drill-env.sh
+--- apache-drill-0.7.0-src/distribution/src/resources/drill-env.sh	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/drill-env.sh	Thu Feb 26 08:54:27 2015
+@@ -13,11 +13,15 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-DRILL_MAX_DIRECT_MEMORY="8G"
+-DRILL_MAX_HEAP="4G"
++DRILL_MAX_DIRECT_MEMORY="3G"
++DRILL_MAX_HEAP="2G"
+ 
+ export DRILL_JAVA_OPTS="-Xms1G -Xmx$DRILL_MAX_HEAP -XX:MaxDirectMemorySize=$DRILL_MAX_DIRECT_MEMORY -XX:MaxPermSize=512M -XX:ReservedCodeCacheSize=1G -ea"
+ 
+ # Class unloading is disabled by default in Java 7
+ # http://hg.openjdk.java.net/jdk7u/jdk7u60/hotspot/file/tip/src/share/vm/runtime/globals.hpp#l1622
+ export SERVER_GC_OPTS="-XX:+CMSClassUnloadingEnabled -XX:+UseConcMarkSweepGC"
++
++# Drill log directory need to be created.
++# export DRILL_LOG_DIR=c:/tmp/drill/log
++
+diff -uN -r apache-drill-0.7.0-src/distribution/src/resources/drill-override.conf apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/drill-override.conf
+--- apache-drill-0.7.0-src/distribution/src/resources/drill-override.conf	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/drill-override.conf	Thu Feb 26 07:16:04 2015
+@@ -21,5 +21,48 @@
+ 
+ drill.exec: {
+   cluster-id: "drillbits1",
+-  zk.connect: "localhost:2181"
++  zk.connect: "localhost:2181",
++  metrics : {
++    context: "drillbit",
++    jmx: {
++      enabled: true
++    },
++    log: {
++      enabled: false,
++      interval: 60
++    }
++  },
++  http: {
++    enabled: true,
++    port: 8047
++  },
++  sys.store.provider: {
++    # class: "org.apache.drill.exec.store.sys.zk.ZkPStoreProvider",
++    class: "org.apache.drill.exec.store.sys.local.LocalPStoreProvider",
++
++    # The following section is used by ZkPStoreProvider
++    zk: {
++      blobroot: "file:///c:/tmp/log/drill"
++    },
++    # The following section is only required by LocalPStoreProvider
++    local: {
++      path: "c:/tmp/drill",
++      write: true
++    }
++  },
++  trace: {
++    directory: "c:/tmp/drill-trace",
++    filesystem: "file:///"
++  },
++  tmp: {
++    directories: ["c:/tmp/drill"],
++    filesystem: "drill-local:///"
++  },
++  sort.external.spill: {
++    directories: ["c:/tmp/drill/spill"],
++    fs: "file:///"
++  },
++  verbose: false,
++  debug.error_on_leak: true
+ }
++
+diff -uN -r apache-drill-0.7.0-src/distribution/src/resources/drillbit.sh apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/drillbit.sh
+--- apache-drill-0.7.0-src/distribution/src/resources/drillbit.sh	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/drillbit.sh	Thu Feb 26 07:16:04 2015
+@@ -166,6 +166,12 @@
+     export DRILL_NICENESS=0
+ fi
+ 
++NOHUP=nohup
++if $is_mingw; then
++  # NOHUP=start
++  NOHUP=
++fi
++
+ thiscmd=$0
+ args=$@
+ 
+@@ -174,7 +180,7 @@
+ (start)
+     check_before_start
+     echo starting $command, logging to $logout
+-    nohup $thiscmd internal_start $command $args < /dev/null >> ${logout} 2>&1  &
++    $NOHUP $thiscmd internal_start $command $args < /dev/null >> ${logout} 2>&1  &
+     sleep 1;
+   ;;
+ 
+@@ -183,8 +189,12 @@
+     # Add to the command log file vital stats on our environment.
+     echo "`date` Starting $command on `hostname`" >> $loglog
+     echo "`ulimit -a`" >> $loglog 2>&1
+-    nice -n $DRILL_NICENESS "$DRILL_HOME"/bin/runbit \
++    if $is_mingw; then
++      "$DRILL_HOME/bin/runbit" $command "$@" start >> "$logout" 2>&1 &
++    else
++      nice -n $DRILL_NICENESS "$DRILL_HOME"/bin/runbit \
+         $command "$@" start >> "$logout" 2>&1 &
++    fi
+     echo $! > $pid
+     wait
+   ;;
+diff -uN -r apache-drill-0.7.0-src/distribution/src/resources/logback.xml apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/logback.xml
+--- apache-drill-0.7.0-src/distribution/src/resources/logback.xml	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/logback.xml	Thu Feb 26 07:16:04 2015
+@@ -50,6 +50,7 @@
+ 
+   <logger name="org.apache.drill" additivity="false">
+     <level value="info" />
++    <!-- <level value="debug" /> -->
+     <appender-ref ref="FILE" />
+   </logger>
+ 
+diff -uN -r apache-drill-0.7.0-src/distribution/src/resources/pathfix apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/pathfix
+--- apache-drill-0.7.0-src/distribution/src/resources/pathfix	Thu Jan  1 09:00:00 1970
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/pathfix	Thu Feb 26 07:16:04 2015
+@@ -0,0 +1,20 @@
++#
++# Licensed to the Apache Software Foundation (ASF) under one or more
++# contributor license agreements.  See the NOTICE file distributed with
++# this work for additional information regarding copyright ownership.
++# The ASF licenses this file to You under the Apache License, Version 2.0
++# (the "License"); you may not use this file except in compliance with
++# the License.  You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++pathfix() {
++  pf=`echo $1|sed -e 's/^[cC]:/\/c\//;s/:[cC]:/:\/c\//g;s/:/;/g;s/\/[cC]\//c:\\\\/g;s/\//\\\\/g;s/\\\\\\\\/\\\\/g'`
++  echo $pf
++}
+diff -uN -r apache-drill-0.7.0-src/distribution/src/resources/sqlline apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/sqlline
+--- apache-drill-0.7.0-src/distribution/src/resources/sqlline	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/sqlline	Thu Feb 26 07:44:51 2015
+@@ -24,6 +24,8 @@
+       QUERY=$1;;
+   -f) shift;
+       FILE=$1;;
++  --debug) shift;
++      DRILL_SHELL_JAVA_OPTS="$DRILL_SHELL_JAVA_OPTS -Xdebug -Xrunjdwp:transport=dt_socket,server=y,suspend=n,address=8800";;
+    *) ARGS+=($1);;
+   esac
+   shift
+diff -uN -r apache-drill-0.7.0-src/distribution/src/resources/sqlline.bat apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/sqlline.bat
+--- apache-drill-0.7.0-src/distribution/src/resources/sqlline.bat	Fri Dec 19 03:55:06 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/distribution/src/resources/sqlline.bat	Thu Feb 26 12:13:33 2015
+@@ -121,6 +121,7 @@
+ if "test%HADOOP_HOME%" == "test" (
+   echo HADOOP_HOME not detected...
+   set USE_HADOOP_CP=0
++  set HADOOP_HOME=%DRILL_HOME%\winutils
+ ) else (
+   echo Calculating HADOOP_CLASSPATH ...
+   for %%i in (%HADOOP_HOME%\lib\*.jar) do (
+diff -uN -r apache-drill-0.7.0-src/pom.xml apache-drill-0.7.0-2.6.0-0.12.0-src/pom.xml
+--- apache-drill-0.7.0-src/pom.xml	Fri Dec 19 04:55:56 2014
++++ apache-drill-0.7.0-2.6.0-0.12.0-src/pom.xml	Thu Feb 26 12:04:52 2015
+@@ -32,6 +32,7 @@
+     <proto.cas.path>${project.basedir}/src/main/protobuf/</proto.cas.path>
+     <dep.junit.version>4.11</dep.junit.version>
+     <dep.slf4j.version>1.7.5</dep.slf4j.version>
++    <dep.hadoop.version>2.6.0</dep.hadoop.version>
+   </properties>
+ 
+   <scm>
+@@ -265,6 +266,10 @@
+           <maxmem>2048m</maxmem>
+           <useIncrementalCompilation>false</useIncrementalCompilation>
+           <fork>true</fork>
++          <!--
++          <debug>true</debug>
++          <debuglevel>lines,vars,source</debuglevel>
++          -->
+         </configuration>
+       </plugin>
+       <plugin>
+@@ -614,7 +619,7 @@
+           <dependency>
+             <groupId>org.apache.hadoop</groupId>
+             <artifactId>hadoop-common</artifactId>
+-            <version>2.4.1</version>
++            <version>${dep.hadoop.version}</version>
+             <exclusions>
+               <exclusion>
+                 <groupId>org.mortbay.jetty</groupId>
+@@ -705,7 +710,7 @@
+           <dependency>
+             <groupId>org.apache.hadoop</groupId>
+             <artifactId>hadoop-client</artifactId>
+-            <version>2.4.1</version>
++            <version>${dep.hadoop.version}</version>
+             <exclusions>
+               <exclusion>
+                 <groupId>javax.servlet</groupId>
+@@ -932,7 +937,7 @@
+           <dependency>
+             <groupId>org.apache.hadoop</groupId>
+             <artifactId>hadoop-hdfs</artifactId>
+-            <version>2.4.1</version>
++            <version>${dep.hadoop.version}</version>
+             <classifier>tests</classifier>
+             <scope>test</scope>
+             <exclusions>
